@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Prerenders App.svelte to static HTML via Svelte's built-in server renderer
 // (svelte/server) so `curl` and non-JS crawlers get the real skeleton —
 // headings, FAQ text, links — instead of an empty <div id="app">. No

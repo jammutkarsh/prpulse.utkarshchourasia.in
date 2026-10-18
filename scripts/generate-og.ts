@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Generates og.png in code (satori + resvg) from the site's real brand
 // tokens/copy — no design tool, no AI image gen, not checked into git.
 // Output dir is a CLI arg: 'public' for dev (vite's static root), 'dist' for

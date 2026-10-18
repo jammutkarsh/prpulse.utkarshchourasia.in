@@ -13,31 +13,31 @@
 	"scripts": {
 		"dev": "vite",
 		"check": "svelte-check --incremental",
-		"test": "tsx extension/lib/providers/github-provider.test.ts && tsx extension/lib/pr-view.test.ts && tsx extension/lib/pr-notify.test.ts && tsx extension/lib/popup-session.test.ts && tsx extension/lib/storage.test.ts && tsx extension/lib/jira.test.ts",
+		"test": "bun extension/lib/providers/github-provider.test.ts && bun extension/lib/pr-view.test.ts && bun extension/lib/pr-notify.test.ts && bun extension/lib/popup-session.test.ts && bun extension/lib/storage.test.ts && bun extension/lib/jira.test.ts",
 		"format": "prettier --write .",
 		"lint": "eslint . --ext .js,.ts,.svelte --cache --cache-location .cache/eslint",
 		"deadcode": "fallow fix",
 		"clean:cache": "rm -rf .cache .svelte-check",
 		"clean": "rm -rf dist && rm -f pr-pulse-*.zip pr-pulse-*.xpi",
-		"manifest:chrome": "tsx scripts/generate-manifest.ts chrome dist/chrome/manifest.json $npm_package_version",
-		"manifest:firefox": "tsx scripts/generate-manifest.ts firefox dist/firefox/manifest.json $npm_package_version",
-		"manifest": "npm run manifest:chrome && npm run manifest:firefox",
+		"manifest:chrome": "bun scripts/generate-manifest.ts chrome dist/chrome/manifest.json $npm_package_version",
+		"manifest:firefox": "bun scripts/generate-manifest.ts firefox dist/firefox/manifest.json $npm_package_version",
+		"manifest": "bun run manifest:chrome && bun run manifest:firefox",
 		"build:watch": "vite build --mode chrome --watch --outDir dist/chrome",
-		"build:chrome": "vite build --mode chrome --outDir dist/chrome && npm run manifest:chrome",
-		"build:firefox": "vite build --mode firefox --outDir dist/firefox && npm run manifest:firefox",
-		"build": "npm run build:chrome && npm run build:firefox",
+		"build:chrome": "vite build --mode chrome --outDir dist/chrome && bun run manifest:chrome",
+		"build:firefox": "vite build --mode firefox --outDir dist/firefox && bun run manifest:firefox",
+		"build": "bun run build:chrome && bun run build:firefox",
 		"zip:chrome": "cd dist/chrome && zip -rq ../../pr-pulse-v$npm_package_version-chrome.zip .",
 		"zip:firefox": "cd dist/firefox && zip -rq ../../pr-pulse-v$npm_package_version-firefox.xpi .",
-		"zip": "npm run zip:chrome && npm run zip:firefox",
-		"generate:chrome": "npm run clean && npm run lint && npm run build:chrome && npm run zip:chrome",
-		"generate:firefox": "npm run clean && npm run lint && npm run build:firefox && npm run zip:firefox",
-		"generate": "npm run clean && npm run lint && npm run build && npm run zip",
-		"dev:website": "npm run dev -w website",
-		"build:website": "npm run build -w website",
-		"preview:website": "npm run preview -w website",
-		"check:website": "npm run check -w website",
-		"lint:website": "npm run lint -w website",
-		"deploy:website": "npm run deploy -w website"
+		"zip": "bun run zip:chrome && bun run zip:firefox",
+		"generate:chrome": "bun run clean && bun run lint && bun run build:chrome && bun run zip:chrome",
+		"generate:firefox": "bun run clean && bun run lint && bun run build:firefox && bun run zip:firefox",
+		"generate": "bun run clean && bun run lint && bun run build && bun run zip",
+		"dev:website": "bun run --filter pr-pulse-website dev",
+		"build:website": "bun run --filter pr-pulse-website build",
+		"preview:website": "bun run --filter pr-pulse-website preview",
+		"check:website": "bun run --filter pr-pulse-website check",
+		"lint:website": "bun run --filter pr-pulse-website lint",
+		"deploy:website": "bun run --filter pr-pulse-website deploy"
 	},
 	"repository": {
 		"type": "git",
@@ -60,7 +60,7 @@
 	},
 	"homepage": "https://github.com/jammutkarsh/pr-pulse#readme",
 	"engines": {
-		"node": ">=26"
+		"bun": ">=1.3"
 	},
 	"dependencies": {
 		"fallow": "^2.104.0",
@@ -85,16 +85,15 @@
 		"satori": "^0.12.2",
 		"svelte-check": "^4.4.5",
 		"tailwindcss": "^4.3.0",
-		"tsx": "^4.22.4",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.62.1",
 		"vite": "^8.0.1",
 		"wrangler": "^4.110.0"
 	},
-	"allowScripts": {
-		"fsevents@2.3.3": true,
-		"esbuild@0.28.1": true,
-		"sharp@0.34.5": true,
-		"workerd@1.20260710.1": true
-	}
+	"trustedDependencies": [
+		"fsevents",
+		"esbuild",
+		"sharp",
+		"workerd"
+	]
 }

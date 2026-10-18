@@ -5,13 +5,13 @@
 	"description": "Marketing site for the PR Pulse browser extension — Say No to Navigation.",
 	"type": "module",
 	"scripts": {
-		"dev": "tsx ../scripts/generate-og.ts public && vite",
-		"build": "vite build && tsx ../scripts/generate-og.ts dist && tsx ../scripts/prerender.ts dist",
-		"preview": "npm run build && vite preview",
+		"dev": "bun ../scripts/generate-og.ts public && vite",
+		"build": "vite build && bun ../scripts/generate-og.ts dist && bun ../scripts/prerender.ts dist",
+		"preview": "bun run build && vite preview",
 		"check": "svelte-check --tsconfig ./tsconfig.json",
 		"lint": "eslint . --ext .js,.ts,.svelte --cache --cache-location .cache/eslint",
 		"format": "prettier --write .",
-		"deploy": "npm run build && wrangler deploy"
+		"deploy": "bun run build && wrangler deploy"
 	},
 	"license": "MIT"
 }

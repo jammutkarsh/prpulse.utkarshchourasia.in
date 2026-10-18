@@ -1,11 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Find unused CSS classes in app.css not referenced in any source file.
- * Usage: node scripts/find-unused-css.js
+ * Usage: bun scripts/find-unused-css.ts
  */
 
-import { readFileSync } from 'node:fs';
-import { globSync } from 'tinyglobby';
+import { globSync, readFileSync } from 'node:fs';
 
 const CSS_FILE = 'extension/src/styles/app.css';
 const SRC = 'extension/src/**/*.{svelte,ts,js,html}';
@@ -29,7 +28,7 @@ while ((match = classRegex.exec(css)) !== null) {
 }
 
 // 2. Scan all source files for usage
-const files = globSync([SRC, SERVICE_WORKER]);
+const files = [...globSync(SRC), SERVICE_WORKER];
 const usageCount = new Map<string, number>();
 for (const c of classes) usageCount.set(c, 0);
 
