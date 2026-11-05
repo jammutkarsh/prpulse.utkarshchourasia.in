@@ -125,18 +125,25 @@ async function withFetch<T>(stub: typeof fetch, run: () => Promise<T>): Promise<
 }
 
 async function testFetchSurvivesQueryTimeouts(): Promise<void> {
-	// 155 open PRs, and anything above 25 per page times out: the reported failure. All 155 must load,
-	// and once shrunk the view stays shrunk rather than timing out again on every page.
-	const busy = fakeGitHub(155, 25);
+	// 155 open PRs, and the default 25-PR page never times out: no retries at all.
+	const healthy = fakeGitHub(155, 25);
+	const fetched = await withFetch(healthy.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
+	assert.equal(fetched.myPRs.length, 155);
+	assert.deepEqual(healthy.searchSizes, [25, 25, 25, 25, 25, 25, 5]);
+
+	// Anything above 12 per page times out. All 155 must still load, and once shrunk the view stays
+	// shrunk rather than timing out again on every page.
+	const busy = fakeGitHub(155, 12);
 	const result = await withFetch(busy.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
 	assert.equal(result.myPRs.length, 155);
 	assert.equal(new Set(result.myPRs.map((pr) => pr.id)).size, 155);
-	assert.deepEqual(busy.searchSizes, [100, 50, 25, 25, 25, 25, 25, 25, 5]);
+	assert.deepEqual(busy.searchSizes, [25, ...Array(12).fill(12), 11]);
 
 	// 504 is treated the same way.
-	const gateway = fakeGitHub(30, 25, 504);
+	const gateway = fakeGitHub(30, 12, 504);
 	const viaGateway = await withFetch(gateway.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
 	assert.equal(viaGateway.myPRs.length, 30);
+	assert.deepEqual(gateway.searchSizes, [25, 12, 12, 6]);
 
 	// Still timing out at the floor: give up and surface the error rather than retrying forever.
 	const hopeless = fakeGitHub(155, 5);
@@ -144,7 +151,7 @@ async function testFetchSurvivesQueryTimeouts(): Promise<void> {
 		withFetch(hopeless.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests()),
 		(error: unknown) => isQueryTimeout(error),
 	);
-	assert.deepEqual(hopeless.searchSizes, [100, 50, 25, 12, 10]);
+	assert.deepEqual(hopeless.searchSizes, [25, 12, 10]);
 
 	// The 300-PR cap still applies when pages are small.
 	const huge = fakeGitHub(1000, 25);

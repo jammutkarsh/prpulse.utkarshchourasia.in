@@ -67,6 +67,11 @@ type StatesResponse = {
 // connections multiply by their parent's page size. So each PR node here costs roughly
 // 1 + REVIEWS + REVIEW_REQUESTS + REVIEW_THREADS nodes, and the search page size multiplies all of it.
 const MAX_PAGE_SIZE = 100;
+// What a page actually asks for. GitHub allows 100, but a 100-PR page with all its nested reviews
+// runs close to GraphQL's ~10s timeout and regularly crosses it (measured: 4 of 6 requests at 100
+// returned 502/504 after ~11s; 6 of 6 at 25 succeeded in ~4s). Point cost is per PR either way, so
+// smaller pages cost more round trips but no extra rate limit.
+const DEFAULT_PAGE_SIZE = 25;
 // The cap is on PRs, not pages: a view that had to shrink its page size after a timeout still gets
 // the same coverage as one that fetched full pages.
 const MAX_PRS_PER_VIEW = 300;
@@ -444,7 +449,7 @@ export class GitHubProvider implements PrSource {
 		let cursor: string | null = null;
 		let dropped = 0;
 		// Lowered after a timeout and kept low: the next page of the same view would time out just the same.
-		let pageSizeLimit = MAX_PAGE_SIZE;
+		let pageSizeLimit = DEFAULT_PAGE_SIZE;
 
 		for (let page = 1; ; page++) {
 			const seen = pullRequests.length + dropped;
