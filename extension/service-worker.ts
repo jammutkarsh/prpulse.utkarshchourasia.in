@@ -54,7 +54,18 @@ async function fetchWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<
 	throw lastError;
 }
 
-async function fetchAndCachePRs(throwError = false): Promise<void> {
+interface FetchOptions {
+	throwError?: boolean;
+	/**
+	 * Refresh the cache and badge without notifying. For the fetch that runs on browser start,
+	 * extension update or account connect: the cache it diffs against can be hours old (or another
+	 * account's), so every review request that arrived meanwhile would announce itself at once. The
+	 * dashboard and badge already show them; the next poll diffs against fresh data.
+	 */
+	silent?: boolean;
+}
+
+async function fetchAndCachePRs({ throwError = false, silent = false }: FetchOptions = {}): Promise<void> {
 	try {
 		const source = await currentSource();
 		if (!source) {
@@ -70,7 +81,7 @@ async function fetchAndCachePRs(throwError = false): Promise<void> {
 		const data = await fetchWithRetry(() => source.getAllPullRequests());
 		await storage.setPullRequests(data);
 		await refreshBadge();
-		await notify(source, previous, data);
+		if (!silent) await notify(source, previous, data);
 		console.log(`Fetched ${data.myPRs.length} my PRs, ${data.reviewRequests.length} review requests`);
 	} catch (error) {
 		console.error('Failed to fetch PR data:', error);
@@ -204,13 +215,13 @@ runtimeOnInstalledAddListener(async (details) => {
 		return;
 	}
 
-	await fetchAndCachePRs();
+	await fetchAndCachePRs({ silent: true });
 	await setupPollingAlarm(true);
 });
 
 runtimeOnStartupAddListener(async () => {
 	await refreshBadge();
-	await fetchAndCachePRs();
+	await fetchAndCachePRs({ silent: true });
 	await setupPollingAlarm(true);
 });
 
@@ -239,13 +250,13 @@ runtimeOnMessageAddListener(async (message) => {
 
 const messageHandlers: Record<RuntimeMessage['type'], (message: RuntimeMessage) => Promise<unknown>> = {
 	PROVIDER_CONFIGURED: async () => {
-		await fetchAndCachePRs();
+		await fetchAndCachePRs({ silent: true });
 		await setupPollingAlarm(true);
 		return { success: true };
 	},
 	REFRESH_PRS: async () => {
 		try {
-			await fetchAndCachePRs(true);
+			await fetchAndCachePRs({ throwError: true });
 			return { success: true };
 		} catch (error) {
 			if (isAuthError(error)) {
