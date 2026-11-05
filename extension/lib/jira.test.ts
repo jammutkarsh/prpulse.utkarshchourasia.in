@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { jiraLinkFor, jiraTicketFor, sanitizeJiraUrl } from './jira';
+import { jiraDashboardUrlFor, jiraLinkFor, jiraTicketFor, sanitizeJiraUrl } from './jira';
 
 // This module takes a user-supplied URL and builds a link the popup renders as an anchor, so the
 // sanitising is a trust boundary, not a formatting nicety. Run with: npm test
@@ -10,13 +10,38 @@ function testSanitizeAcceptsWhatUsersActuallyType(): void {
 	// A bare host is the common case — the scheme gets filled in.
 	assert.equal(sanitizeJiraUrl('acme.atlassian.net'), 'https://acme.atlassian.net');
 
-	// Only the origin survives: a pasted deep link, query and hash are all discarded.
+	// Cloud keeps only the origin: a pasted deep link, query and hash are all discarded.
 	assert.equal(sanitizeJiraUrl('  acme.atlassian.net/browse/ABC-1  '), 'https://acme.atlassian.net');
 	assert.equal(sanitizeJiraUrl('https://acme.atlassian.net/path?q=1#h'), 'https://acme.atlassian.net');
+	assert.equal(sanitizeJiraUrl('https://acme.atlassian.net/jira/software/projects/ABC/boards/1'), 'https://acme.atlassian.net');
 
 	// http and explicit ports are kept — self-hosted Jira lives there.
 	assert.equal(sanitizeJiraUrl('http://localhost:8080'), 'http://localhost:8080');
 	assert.equal(sanitizeJiraUrl('jira.internal:8080'), 'https://jira.internal:8080');
+}
+
+function testSanitizeKeepsSelfHostedContextPath(): void {
+	// Data Center often lives under a path. Regression: `/jira` used to be stripped, so every link 404'd.
+	assert.equal(sanitizeJiraUrl('https://example.com/jira'), 'https://example.com/jira');
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/'), 'https://example.com/jira');
+	assert.equal(sanitizeJiraUrl('example.com/tools/jira'), 'https://example.com/tools/jira');
+
+	// A pasted deep link is cut at the first Jira route, keeping the context path before it.
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/browse/PB-1?focused=1#c'), 'https://example.com/jira');
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/secure/Dashboard.jspa'), 'https://example.com/jira');
+	assert.equal(sanitizeJiraUrl('https://jira.example.com/browse/PB-1'), 'https://jira.example.com');
+	assert.equal(sanitizeJiraUrl('https://jira.example.com/projects/PB/issues'), 'https://jira.example.com');
+
+	assert.deepEqual(jiraLinkFor('feat/PB-42-x', 'https://example.com/jira/browse/PB-1'), {
+		ticket: 'PB-42',
+		url: 'https://example.com/jira/browse/PB-42',
+	});
+}
+
+function testDashboardUrl(): void {
+	assert.equal(jiraDashboardUrlFor('acme.atlassian.net'), 'https://acme.atlassian.net/jira/for-you');
+	assert.equal(jiraDashboardUrlFor('https://example.com/jira'), 'https://example.com/jira/secure/Dashboard.jspa');
+	assert.equal(jiraDashboardUrlFor('javascript:alert(1)'), '');
 }
 
 function testSanitizeRejectsEverythingElse(): void {
@@ -67,6 +92,8 @@ function testLinkNeedsBothHalves(): void {
 }
 
 testSanitizeAcceptsWhatUsersActuallyType();
+testSanitizeKeepsSelfHostedContextPath();
+testDashboardUrl();
 testSanitizeRejectsEverythingElse();
 testTicketExtraction();
 testLinkNeedsBothHalves();

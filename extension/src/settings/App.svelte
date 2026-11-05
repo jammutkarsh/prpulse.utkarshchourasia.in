@@ -11,7 +11,7 @@
 	import { storage } from '../../lib/storage';
 	import type { Settings, StoredProviderConfig } from '../../lib/types';
 	import { isValidHttpUrl, copyToClipboard } from '../../lib/utils';
-	import { sanitizeJiraUrl } from '../../lib/jira';
+	import { jiraDashboardUrlFor, sanitizeJiraUrl } from '../../lib/jira';
 	import { commitProvider, connectGithubToken, refreshTokenExpiration } from '../../lib/github-connect';
 	import { DEFAULT_SETTINGS } from '../../lib/ui-config';
 
@@ -59,7 +59,7 @@
 	}
 
 	let isConnected = $derived(!!(provider && provider.user && !reconnecting));
-	let jiraDashboardUrl = $derived(jiraUrl && isValidHttpUrl(jiraUrl) ? `${jiraUrl}/jira/for-you` : '');
+	let jiraDashboardUrl = $derived(jiraUrl && isValidHttpUrl(jiraUrl) ? jiraDashboardUrlFor(jiraUrl) : '');
 	let normalizedCustomMinutes = $derived.by(() => {
 		const parsed = Number(customMinutes);
 		if (!Number.isFinite(parsed)) {
