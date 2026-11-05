@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { firstUnresolvedThreadUrl, nextPageSize } from './github-provider';
+import { ProviderError } from '../errors';
+import { firstUnresolvedThreadUrl, GitHubProvider, isQueryTimeout, nextPageSize, smallerPageSize } from './github-provider';
 
 // Sizing the request to the count probe is what keeps a 7-PR user from being billed like a 100-PR one,
 // so the arithmetic gets a check. Run with: npm test
@@ -51,4 +52,105 @@ function testFirstUnresolvedThreadUrl(): void {
 }
 
 testFirstUnresolvedThreadUrl();
+
+// GitHub's GraphQL timeout surfaces as 502/504. Only those may shrink the page; anything else is a
+// real failure and must still throw. Run with: bun run test
+function testTimeoutShrinking(): void {
+	const error = (statusCode: number) => new ProviderError('GitHub API error', 'API_ERROR', { statusCode });
+
+	assert.equal(isQueryTimeout(error(502)), true);
+	assert.equal(isQueryTimeout(error(504)), true);
+	assert.equal(isQueryTimeout(error(500)), false);
+	assert.equal(isQueryTimeout(error(401)), false);
+	assert.equal(isQueryTimeout(new TypeError('Failed to fetch')), false);
+
+	// Halves, floors at the minimum, then gives up.
+	assert.equal(smallerPageSize(100), 50);
+	assert.equal(smallerPageSize(50), 25);
+	assert.equal(smallerPageSize(25), 12);
+	assert.equal(smallerPageSize(12), 10);
+	assert.equal(smallerPageSize(10), null);
+	assert.equal(smallerPageSize(7), null);
+}
+
+testTimeoutShrinking();
+
+/**
+ * A fake GraphQL endpoint holding `total` open PRs that times out (502) on any search page larger
+ * than `maxFirst`, which is how GitHub behaves for an account with many open PRs.
+ */
+function fakeGitHub(total: number, maxFirst: number, status = 502) {
+	const searchSizes: number[] = [];
+
+	const fetchStub = async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const { query, variables } = JSON.parse(String(init?.body));
+		const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+		if (query.includes('issueCount')) {
+			return json({
+				data: { rateLimit: null, myPRs: { issueCount: total }, reviewRequests: { issueCount: 0 }, reviewedPRs: { issueCount: 0 } },
+			});
+		}
+
+		searchSizes.push(variables.first);
+		if (variables.first > maxFirst) {
+			return new Response('', { status });
+		}
+
+		const start = variables.after ? Number(variables.after) : 0;
+		const end = Math.min(start + variables.first, total);
+		const nodes = Array.from({ length: end - start }, (_, i) => ({
+			id: `PR_${start + i}`,
+			number: start + i,
+			title: 't',
+			url: 'https://github.com/o/r/pull/1',
+		}));
+		return json({ data: { rateLimit: null, search: { pageInfo: { hasNextPage: end < total, endCursor: String(end) }, nodes } } });
+	};
+
+	return { fetchStub, searchSizes };
+}
+
+async function withFetch<T>(stub: typeof fetch, run: () => Promise<T>): Promise<T> {
+	const original = globalThis.fetch;
+	const originalWarn = console.warn;
+	globalThis.fetch = stub;
+	console.warn = () => {};
+	try {
+		return await run();
+	} finally {
+		globalThis.fetch = original;
+		console.warn = originalWarn;
+	}
+}
+
+async function testFetchSurvivesQueryTimeouts(): Promise<void> {
+	// 155 open PRs, and anything above 25 per page times out: the reported failure. All 155 must load,
+	// and once shrunk the view stays shrunk rather than timing out again on every page.
+	const busy = fakeGitHub(155, 25);
+	const result = await withFetch(busy.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
+	assert.equal(result.myPRs.length, 155);
+	assert.equal(new Set(result.myPRs.map((pr) => pr.id)).size, 155);
+	assert.deepEqual(busy.searchSizes, [100, 50, 25, 25, 25, 25, 25, 25, 5]);
+
+	// 504 is treated the same way.
+	const gateway = fakeGitHub(30, 25, 504);
+	const viaGateway = await withFetch(gateway.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
+	assert.equal(viaGateway.myPRs.length, 30);
+
+	// Still timing out at the floor: give up and surface the error rather than retrying forever.
+	const hopeless = fakeGitHub(155, 5);
+	await assert.rejects(
+		withFetch(hopeless.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests()),
+		(error: unknown) => isQueryTimeout(error),
+	);
+	assert.deepEqual(hopeless.searchSizes, [100, 50, 25, 12, 10]);
+
+	// The 300-PR cap still applies when pages are small.
+	const huge = fakeGitHub(1000, 25);
+	const capped = await withFetch(huge.fetchStub as typeof fetch, () => new GitHubProvider({ token: 't' }).getAllPullRequests());
+	assert.equal(capped.myPRs.length, 300);
+}
+
+await testFetchSurvivesQueryTimeouts();
 console.log('github-provider: all checks passed');

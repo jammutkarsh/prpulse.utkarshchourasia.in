@@ -67,7 +67,13 @@ type StatesResponse = {
 // connections multiply by their parent's page size. So each PR node here costs roughly
 // 1 + REVIEWS + REVIEW_REQUESTS + REVIEW_THREADS nodes, and the search page size multiplies all of it.
 const MAX_PAGE_SIZE = 100;
-const MAX_PAGES = 3;
+// The cap is on PRs, not pages: a view that had to shrink its page size after a timeout still gets
+// the same coverage as one that fetched full pages.
+const MAX_PRS_PER_VIEW = 300;
+// GitHub abandons a GraphQL query that runs past its ~10s budget and answers 502 or 504. Wall time
+// grows with the page size, so a full page of PRs with all their nested reviews can time out on
+// every attempt for an account with many open PRs. Halve and retry the same cursor, down to this floor.
+const MIN_PAGE_SIZE = 10;
 const REVIEWS_PAGE_SIZE = 50;
 const REVIEW_REQUESTS_PAGE_SIZE = 20;
 const REVIEW_THREADS_PAGE_SIZE = 25;
@@ -193,6 +199,21 @@ export function firstUnresolvedThreadUrl(
 
 export function nextPageSize(issueCount: number, alreadySeen: number): number {
 	return Math.min(Math.max(issueCount - alreadySeen, 1), MAX_PAGE_SIZE);
+}
+
+/** A 502/504 from GitHub's GraphQL endpoint is its query timeout, not an outage: a smaller page can succeed. */
+export function isQueryTimeout(error: unknown): boolean {
+	const statusCode = error instanceof ProviderError ? error.details.statusCode : undefined;
+	return statusCode === 502 || statusCode === 504;
+}
+
+/** The page size to retry a timed-out page with, or null once there is nothing smaller worth trying. */
+export function smallerPageSize(first: number): number | null {
+	if (first <= MIN_PAGE_SIZE) {
+		return null;
+	}
+
+	return Math.max(Math.floor(first / 2), MIN_PAGE_SIZE);
 }
 
 export class GitHubProvider implements PrSource {
@@ -422,13 +443,35 @@ export class GitHubProvider implements PrSource {
 		const pullRequests: PullRequest[] = [];
 		let cursor: string | null = null;
 		let dropped = 0;
+		// Lowered after a timeout and kept low: the next page of the same view would time out just the same.
+		let pageSizeLimit = MAX_PAGE_SIZE;
 
-		for (let page = 1; page <= MAX_PAGES; page++) {
-			const first = nextPageSize(issueCount, pullRequests.length + dropped);
-			const data = await this.#graphql<SearchResponse>(SEARCH_QUERY, { q: SEARCH_QUERIES[view], first, after: cursor });
+		for (let page = 1; ; page++) {
+			const seen = pullRequests.length + dropped;
+			if (seen >= MAX_PRS_PER_VIEW) {
+				console.warn(`GitHub GraphQL ${view}: stopped at the ${MAX_PRS_PER_VIEW}-PR cap; more are available`);
+				break;
+			}
+
+			const first = Math.min(nextPageSize(issueCount, seen), pageSizeLimit, MAX_PRS_PER_VIEW - seen);
+			let data: SearchResponse;
+			try {
+				data = await this.#graphql<SearchResponse>(SEARCH_QUERY, { q: SEARCH_QUERIES[view], first, after: cursor });
+			} catch (error) {
+				const smaller = isQueryTimeout(error) ? smallerPageSize(first) : null;
+				if (smaller === null) {
+					throw error;
+				}
+
+				console.warn(`GitHub GraphQL ${view} page ${page} timed out at first: ${first}; retrying with first: ${smaller}`);
+				pageSizeLimit = smaller;
+				page--;
+				continue;
+			}
 			this.#logCost(`${view} page ${page} (first: ${first})`, data.rateLimit);
 
-			for (const node of data.search?.nodes || []) {
+			const nodes = data.search?.nodes || [];
+			for (const node of nodes) {
 				if (!node?.id) {
 					dropped++;
 					continue;
@@ -439,17 +482,13 @@ export class GitHubProvider implements PrSource {
 
 			// issueCount is a snapshot from the probe, so hasNextPage — not the count — ends the loop.
 			// A PR opened between the probe and this request still gets picked up.
-			if (!data.search?.pageInfo?.hasNextPage) {
+			// The PR cap only bounds the loop while pages make progress; an empty page that still claims a
+			// next one would otherwise loop forever.
+			if (!data.search?.pageInfo?.hasNextPage || nodes.length === 0) {
 				break;
 			}
 
 			cursor = data.search.pageInfo.endCursor;
-
-			if (page === MAX_PAGES) {
-				console.warn(
-					`GitHub GraphQL ${view}: stopped at the ${MAX_PAGES}-page cap with ${pullRequests.length} PRs; more are available`,
-				);
-			}
 		}
 
 		if (dropped > 0) {
