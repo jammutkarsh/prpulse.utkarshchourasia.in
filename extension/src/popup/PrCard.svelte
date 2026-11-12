@@ -88,6 +88,12 @@
 		return link && isValidHttpUrl(link.url) ? link : null;
 	}
 
+	// Conflicts block the merge whatever the reviewers think, so they replace the yellow/red review
+	// state. Approved stays green: the review is done and the badge shouldn't hide that.
+	function hasConflicts(pr: PullRequest) {
+		return pr.mergeable === 'conflicting' && pr.reviews?.status !== 'approved';
+	}
+
 	function getCardStatusClass(pr: PullRequest) {
 		if (pr.isDraft) {
 			return 'pr-card-draft';
@@ -96,7 +102,7 @@
 		const checksStatus = pr.checks?.status;
 		const reviewsStatus = pr.reviews?.status;
 
-		if (checksStatus === 'failure' || reviewsStatus === 'changes_requested') {
+		if (checksStatus === 'failure' || reviewsStatus === 'changes_requested' || hasConflicts(pr)) {
 			return 'pr-card-danger';
 		}
 
@@ -114,7 +120,11 @@
 		return 'pr-card-warning';
 	}
 
-	let reviewDisplay = $derived(getReviewStatusDisplay(pr.reviews?.status, pr.reviews?.openThreadCount));
+	let reviewDisplay = $derived(
+		hasConflicts(pr)
+			? { label: 'Merge Conflicts', tone: 'status-inline-danger', dot: 'status-dot-danger' }
+			: getReviewStatusDisplay(pr.reviews?.status, pr.reviews?.openThreadCount)
+	);
 	let checkDisplay = $derived(getCheckStatusDisplay(pr.checks?.status));
 	let jiraLink = $derived(getJiraLink(pr));
 	let branchUrl = $derived(getBranchUrl(pr));
@@ -126,7 +136,7 @@
 		? 'unstyled-button status-inline group'
 		: 'unstyled-button status-inline min-w-0 group');
 	let reviewUrl = $derived(
-		pr.reviews?.status === 'changes_requested'
+		pr.reviews?.status === 'changes_requested' && !hasConflicts(pr)
 			? (pr.reviews?.firstUnresolvedThreadUrl
 				?? (pr.reviews?.changesRequestedReviewId
 					? `${pr.url}#pullrequestreview-${pr.reviews.changesRequestedReviewId}`
