@@ -4,8 +4,7 @@
 	import { storage } from '../../lib/storage';
 	import { DEFAULT_SETTINGS } from '../../lib/ui-config';
 	import type { PullRequestData, Settings, StoredProviderConfig } from '../../lib/types';
-	import { isValidHttpUrl } from '../../lib/utils';
-	import { sanitizeJiraUrl } from '../../lib/jira';
+	import { commitJiraUrl } from '../../lib/jira';
 	import { commitProvider, connectGithubToken } from '../../lib/github-connect';
 	import GithubStep from './steps/GithubStep.svelte';
 	import DefaultViewStep from './steps/DefaultViewStep.svelte';
@@ -94,9 +93,13 @@
 	}
 
 	function nextStep() {
-		if (currentStep === STEP_JIRA && settings.jiraBaseUrl && !isValidHttpUrl(settings.jiraBaseUrl)) {
-			errorMessage = 'Please enter a valid Jira URL or leave the field empty.';
-			return;
+		if (currentStep === STEP_JIRA) {
+			const committed = commitJiraUrl(settings.jiraBaseUrl);
+			if (committed === null) {
+				errorMessage = 'Please enter a valid Jira URL or leave the field empty.';
+				return;
+			}
+			settings = { ...settings, jiraBaseUrl: committed };
 		}
 
 		errorMessage = '';
@@ -116,11 +119,9 @@
 		settings = { ...settings, notificationsEnabled: enabled && (await permissionsRequest(['notifications'])) };
 	}
 
+	// Kept raw while typing: sanitising per keystroke eats the trailing `/` and a context path can't be typed.
 	function updateJiraUrl(value: string) {
-		settings = {
-			...settings,
-			jiraBaseUrl: sanitizeJiraUrl(value.trim()),
-		};
+		settings = { ...settings, jiraBaseUrl: value };
 	}
 
 	async function completeSetup() {
@@ -135,7 +136,7 @@
 
 		try {
 			// Settings first: the worker reads them the moment the provider commit wakes it.
-			await storage.setSettings(settings);
+			await storage.setSettings({ ...settings, jiraBaseUrl: commitJiraUrl(settings.jiraBaseUrl) ?? '' });
 
 			// Listen for the PR data write triggered by the service worker
 			const prSyncPromise = new Promise<number>((resolve) => {

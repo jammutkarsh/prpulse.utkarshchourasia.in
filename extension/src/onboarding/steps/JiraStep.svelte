@@ -2,7 +2,7 @@
 	import { ArrowLeft, ArrowRight, Link2 } from 'lucide-svelte';
 	import Button from '../../lib/components/Button.svelte';
 	import SectionCard from '../../lib/components/SectionCard.svelte';
-	import { isValidHttpUrl } from '../../../lib/utils';
+	import { jiraLinkFor } from '../../../lib/jira';
 
 	type VoidCallback = () => void;
 
@@ -20,7 +20,7 @@
 		onBack = () => {}
 	}: Props = $props();
 
-	let previewUrl = $derived(jiraBaseUrl && isValidHttpUrl(jiraBaseUrl) ? `${jiraBaseUrl}/browse/JIRA-1234` : '');
+	let previewUrl = $derived(jiraLinkFor('JIRA-1234', jiraBaseUrl)?.url ?? '');
 </script>
 
 <SectionCard className="p-6">
