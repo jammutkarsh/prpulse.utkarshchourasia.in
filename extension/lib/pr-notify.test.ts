@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { notificationsFor, DASHBOARD_URL } from './pr-notify';
+import { notificationsFor, isStaleCache, DASHBOARD_URL } from './pr-notify';
 import type { PullRequest, PullRequestData } from './types';
 
 // The rules that decide whether you get interrupted. Every case here is one that would otherwise
@@ -234,6 +234,17 @@ function testIdCarriesTheClickTarget(): void {
 	assert.equal(spec.id.slice(spec.id.indexOf('|') + 1), spec.url);
 }
 
+function testStaleCache(): void {
+	const MIN = 60_000;
+	assert.equal(isStaleCache(null, LAST_FETCH, 10 * MIN), false);
+	// Within three missed polls, or 30 minutes, the diff is still meaningful.
+	assert.equal(isStaleCache(LAST_FETCH, LAST_FETCH + 30 * MIN, 10 * MIN), false);
+	assert.equal(isStaleCache(LAST_FETCH, LAST_FETCH + 31 * MIN, 10 * MIN), true);
+	assert.equal(isStaleCache(LAST_FETCH, LAST_FETCH + 60 * MIN, 30 * MIN), false);
+	assert.equal(isStaleCache(LAST_FETCH, LAST_FETCH + 91 * MIN, 30 * MIN), true);
+}
+
+testStaleCache();
 testFirstRunIsSilent();
 testDiffSizeRidesAlong();
 testReviewRequestNeedsAnOutstandingAsk();

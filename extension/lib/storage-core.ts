@@ -83,6 +83,13 @@ export function createStorage(store: KeyValueStore) {
 	}
 
 	async function setProvider(provider: StoredProviderConfig): Promise<void> {
+		const identity = (config: StoredProviderConfig | undefined) => `${config?.baseUrl ?? ''}|${config?.user?.login ?? ''}`;
+		const previous = await getProvider();
+		// Another account's PRs must not be diffed against the new one's: they would read as vanished
+		// and fire merged/closed notifications if the first fetch after the switch fails.
+		if (previous && identity(previous) !== identity(provider)) {
+			await store.remove([STORAGE_KEYS.PULL_REQUESTS]);
+		}
 		return set(STORAGE_KEYS.PROVIDER, provider);
 	}
 
