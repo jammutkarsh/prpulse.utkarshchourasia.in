@@ -265,6 +265,13 @@ function group(kind: NotifyKind, events: Event[]): NotifySpec {
 	};
 }
 
+const MIN_STALE_MS = 30 * 60 * 1000;
+
+/** A cache this old would announce every change since, so it is refreshed silently instead. */
+export function isStaleCache(lastFetched: number | null, now: number, pollingIntervalMs: number): boolean {
+	return lastFetched !== null && now - lastFetched > Math.max(3 * pollingIntervalMs, MIN_STALE_MS);
+}
+
 /**
  * The diff, as notifications: one per changed PR. With `grouped`, several changes of the same kind in
  * one refresh collapse into a single count instead — a morning's backlog as one line, not fifteen.
