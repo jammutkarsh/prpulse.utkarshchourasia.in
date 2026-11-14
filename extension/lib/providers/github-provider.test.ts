@@ -3,7 +3,7 @@ import { ProviderError } from '../errors';
 import { firstUnresolvedThreadUrl, GitHubProvider, isQueryTimeout, nextPageSize, smallerPageSize } from './github-provider';
 
 // Sizing the request to the count probe is what keeps a 7-PR user from being billed like a 100-PR one,
-// so the arithmetic gets a check. Run with: npm test
+// so the arithmetic gets a check. Run with: bun run test
 function testNextPageSize(): void {
 	// Small view: one page sized exactly, no rounding up to the max.
 	assert.equal(nextPageSize(7, 0), 7);
@@ -25,7 +25,7 @@ function testNextPageSize(): void {
 testNextPageSize();
 
 // The "Changes Requested (N)" link must land on a thread the count actually includes — resolved and
-// outdated threads must never win, even when they come first. Run with: npm test
+// outdated threads must never win, even when they come first. Run with: bun run test
 function testFirstUnresolvedThreadUrl(): void {
 	const resolved = { isResolved: true, isOutdated: false, comments: { nodes: [{ url: 'resolved', createdAt: '2026-01-01T00:00:00Z' }] } };
 	const outdated = { isResolved: false, isOutdated: true, comments: { nodes: [{ url: 'outdated', createdAt: '2026-01-02T00:00:00Z' }] } };
