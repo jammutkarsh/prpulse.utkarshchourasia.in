@@ -70,9 +70,26 @@ export interface PrSourceResult {
 	reviewRequests: PullRequest[];
 }
 
+/** How far a fetch has got. `total` is the sources' own estimate and can be off by PRs that change mid-fetch. */
+export interface SyncProgress {
+	loaded: number;
+	total: number;
+}
+
+/** Called after every page with everything fetched so far, so a slow first sync can be shown as it lands. */
+export type SyncProgressListener = (partial: PrSourceResult, progress: SyncProgress) => void;
+
+/** The worker's fetch, as the popup sees it. Kept in storage because the worker and the popup share nothing else. */
+export interface SyncStatus extends SyncProgress {
+	inProgress: boolean;
+	startedAt: number;
+	/** Refreshed by the worker while it runs, so a slow but live sync is not mistaken for an abandoned one. */
+	updatedAt?: number;
+}
+
 /** The seam: fetching pull requests. Token identity is a separate concern and deliberately absent. */
 export interface PrSource {
-	getAllPullRequests(): Promise<PrSourceResult>;
+	getAllPullRequests(onProgress?: SyncProgressListener): Promise<PrSourceResult>;
 	/** Current `PullRequest['state']` by id, for PRs that dropped out of the open list. Optional: only the extension notifies. */
 	getStates?(ids: string[]): Promise<Map<string, string>>;
 }

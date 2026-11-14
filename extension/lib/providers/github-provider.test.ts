@@ -159,5 +159,24 @@ async function testFetchSurvivesQueryTimeouts(): Promise<void> {
 	assert.equal(capped.myPRs.length, 300);
 }
 
+// Every page reports everything fetched so far, so the popup can show a slow first sync as it lands.
+async function testProgressReportsEveryPage(): Promise<void> {
+	const github = fakeGitHub(60, 25);
+	const reports: Array<{ myPRs: number; loaded: number; total: number }> = [];
+	const result = await withFetch(github.fetchStub as typeof fetch, () =>
+		new GitHubProvider({ token: 't' }).getAllPullRequests((partial, progress) => {
+			reports.push({ myPRs: partial.myPRs.length, ...progress });
+		}),
+	);
+
+	assert.deepEqual(reports, [
+		{ myPRs: 25, loaded: 25, total: 60 },
+		{ myPRs: 50, loaded: 50, total: 60 },
+		{ myPRs: 60, loaded: 60, total: 60 },
+	]);
+	assert.equal(result.myPRs.length, 60);
+}
+
 await testFetchSurvivesQueryTimeouts();
+await testProgressReportsEveryPage();
 console.log('github-provider: all checks passed');

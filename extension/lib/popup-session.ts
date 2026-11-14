@@ -1,6 +1,15 @@
 import { cloneFilters, createDefaultFilters, createDefaultFiltersByTab, sameFilters, switchTab } from './pr-view';
 import type { createStorage } from './storage-core';
-import type { FiltersByTab, PopupFilters, PopupTab, PullRequestData, RuntimeMessage, Settings, StoredProviderConfig } from './types';
+import type {
+	FiltersByTab,
+	PopupFilters,
+	PopupTab,
+	PullRequestData,
+	RuntimeMessage,
+	Settings,
+	StoredProviderConfig,
+	SyncStatus,
+} from './types';
 import { DEFAULT_SETTINGS } from './ui-config';
 
 // Everything the popup does that is not drawing: the bootstrap order, which filters get restored,
@@ -11,6 +20,17 @@ type Storage = ReturnType<typeof createStorage>;
 type SendMessage = (message: RuntimeMessage) => Promise<unknown>;
 
 export const TOKEN_EXPIRED_MESSAGE = 'Token expired or revoked; Connect a new one.';
+
+/**
+ * Longer than any real sync. A worker killed mid-fetch never writes `inProgress: false`, and without a
+ * cutoff the popup would show "Syncing" until the next poll finished.
+ */
+export const STALE_SYNC_MS = 5 * 60 * 1000;
+
+/** The sync worth showing, or null when there is none or the one on disk was abandoned. */
+export function activeSync(status: SyncStatus | undefined, now = Date.now()): SyncStatus | null {
+	return status?.inProgress && now - (status.updatedAt ?? status.startedAt) < STALE_SYNC_MS ? status : null;
+}
 
 export interface PopupState {
 	loading: boolean;
@@ -24,6 +44,8 @@ export interface PopupState {
 	/** The active tab's filters — the same object the tab's entry in `filtersByTab` will be stashed as. */
 	filters: PopupFilters;
 	newPrCount: number;
+	/** The worker's fetch, while one is running. */
+	sync: SyncStatus | null;
 }
 
 export interface RefreshResult {
@@ -55,6 +77,7 @@ function initialState(): PopupState {
 		filtersByTab: createDefaultFiltersByTab(),
 		filters: createDefaultFilters(),
 		newPrCount: 0,
+		sync: null,
 	};
 }
 
@@ -125,6 +148,7 @@ export function createPopupSession({
 			provider,
 			settings: data.settings,
 			pullRequests: data.pullRequests,
+			sync: activeSync(data.syncStatus),
 			tab,
 			filtersByTab,
 			filters: cloneFilters(filtersByTab[tab]),
@@ -170,8 +194,13 @@ export function createPopupSession({
 
 	/** A fresh write from the worker: whatever was not on screen when the popup opened counts as new. */
 	function applyPullRequests(pullRequests: PullRequestData): void {
-		const newPrCount = viewedPrIds.size > 0 ? idsOf(pullRequests).filter((id) => !viewedPrIds.has(id)).length : 0;
+		// A partial first-sync list has no baseline: everything past page one would read as new.
+		const newPrCount = viewedPrIds.size > 0 && pullRequests.lastFetched !== null ? idsOf(pullRequests).filter((id) => !viewedPrIds.has(id)).length : 0;
 		set({ pullRequests, newPrCount });
+	}
+
+	function applySyncStatus(status: SyncStatus | undefined): void {
+		set({ sync: activeSync(status) });
 	}
 
 	async function reload(): Promise<void> {
@@ -221,6 +250,7 @@ export function createPopupSession({
 		setFilters,
 		setNotifications,
 		applyPullRequests,
+		applySyncStatus,
 		reload,
 		refresh,
 	};

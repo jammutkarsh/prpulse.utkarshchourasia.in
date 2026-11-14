@@ -2,7 +2,7 @@
 // throws on import outside a browser extension, so anything that reaches the extension's storage
 // adapter cannot be loaded in node. Keeping the factory here is what makes `storage.test.ts` possible.
 
-import type { FiltersByTab, PopupTab, PullRequestData, Settings, StoredFilterState, StoredProviderConfig } from './types';
+import type { FiltersByTab, PopupTab, PullRequestData, Settings, StoredFilterState, StoredProviderConfig, SyncStatus } from './types';
 import { normalizeFilterState } from './pr-view';
 import { normalizeSettings } from './ui-config';
 
@@ -11,6 +11,7 @@ export const STORAGE_KEYS = {
 	PULL_REQUESTS: 'pullRequests',
 	SETTINGS: 'settings',
 	FILTERS: 'searchFilters',
+	SYNC_STATUS: 'syncStatus',
 } as const;
 
 /**
@@ -66,6 +67,7 @@ export interface BootstrapData {
 	settings: Settings;
 	provider: StoredProviderConfig | undefined;
 	pullRequests: PullRequestData;
+	syncStatus: SyncStatus | undefined;
 }
 
 export function createStorage(store: KeyValueStore) {
@@ -97,18 +99,37 @@ export function createStorage(store: KeyValueStore) {
 		});
 	}
 
+	/**
+	 * Part of a first sync, written so the popup has something to show while the rest loads.
+	 * `lastFetched` stays null on purpose: notifications treat null as "nothing to diff against", so a
+	 * first sync that dies halfway cannot make the next poll announce every PR it had not reached yet.
+	 */
+	async function setPartialPullRequests(pullRequests: Omit<PullRequestData, 'lastFetched'>): Promise<void> {
+		return set(STORAGE_KEYS.PULL_REQUESTS, { ...pullRequests, lastFetched: null });
+	}
+
+	async function setSyncStatus(status: SyncStatus): Promise<void> {
+		return set(STORAGE_KEYS.SYNC_STATUS, status);
+	}
+
 	async function getSettings(): Promise<Settings> {
 		return normalizeSettings(await get<Partial<Settings>>(STORAGE_KEYS.SETTINGS));
 	}
 
 	/** One read for everyone who starts up. Both the popup and the worker needed a bespoke method before. */
 	async function getBootstrapData(): Promise<BootstrapData> {
-		const result = await store.get([STORAGE_KEYS.SETTINGS, STORAGE_KEYS.PROVIDER, STORAGE_KEYS.PULL_REQUESTS]);
+		const result = await store.get([
+			STORAGE_KEYS.SETTINGS,
+			STORAGE_KEYS.PROVIDER,
+			STORAGE_KEYS.PULL_REQUESTS,
+			STORAGE_KEYS.SYNC_STATUS,
+		]);
 
 		return {
 			settings: normalizeSettings(result[STORAGE_KEYS.SETTINGS] as Partial<Settings> | undefined),
 			provider: result[STORAGE_KEYS.PROVIDER] as StoredProviderConfig | undefined,
 			pullRequests: (result[STORAGE_KEYS.PULL_REQUESTS] as PullRequestData | undefined) || emptyPullRequestData(),
+			syncStatus: result[STORAGE_KEYS.SYNC_STATUS] as SyncStatus | undefined,
 		};
 	}
 
@@ -145,6 +166,8 @@ export function createStorage(store: KeyValueStore) {
 		setProvider,
 		getPullRequests,
 		setPullRequests,
+		setPartialPullRequests,
+		setSyncStatus,
 		getSettings,
 		getBootstrapData,
 		setSettings,

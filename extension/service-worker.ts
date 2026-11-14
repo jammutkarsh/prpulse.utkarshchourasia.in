@@ -22,6 +22,7 @@ import { onFiltersChanged, storage } from './lib/storage';
 import { badgeCount } from './lib/pr-view';
 import { DASHBOARD_URL, notificationsFor } from './lib/pr-notify';
 import { isAuthError } from './lib/errors';
+import { runSync as runSyncWith } from './lib/sync';
 import type { PrSource, PrSourceResult, PullRequestData, RuntimeMessage } from './lib/types';
 
 const ALARM_NAME = 'pr-poll';
@@ -29,11 +30,6 @@ const ALARM_NAME = 'pr-poll';
 // No settings cache. MV3 tears this worker down between events, so a cache guards a local storage
 // read that is already cheap, at the cost of three module-level variables five handlers had to
 // invalidate by hand. Read on demand instead; storage is the single source.
-
-async function currentSource(): Promise<PrSource | null> {
-	const provider = await storage.getProvider();
-	return provider ? new GitHubProvider({ token: provider.token, baseUrl: provider.baseUrl }) : null;
-}
 
 async function fetchWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
 	let lastError: unknown;
@@ -54,40 +50,44 @@ async function fetchWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<
 	throw lastError;
 }
 
+// One sync at a time. A poll, the popup's refresh button and a token change can all ask at once; a
+// second fetch would double the requests and race the first to the same storage keys, and two
+// writers of the progress status would each mark it finished while the other was still running.
+let syncInFlight: Promise<void> | null = null;
+
+function syncPRs(): Promise<void> {
+	syncInFlight ??= runSync().finally(() => {
+		syncInFlight = null;
+	});
+	return syncInFlight;
+}
+
 async function fetchAndCachePRs(throwError = false): Promise<void> {
 	try {
-		const source = await currentSource();
-		if (!source) {
-			console.log('No provider configured, skipping fetch');
-			if (throwError) throw new Error('No provider configured');
-			return;
-		}
-
-		console.log('Fetching PR data...');
-		// Read before the overwrite: the previous poll's result is still on disk at this instant, which is
-		// the whole reason notifications need no snapshot key of their own.
-		const previous = await storage.getPullRequests();
-		const data = await fetchWithRetry(() => source.getAllPullRequests());
-		await storage.setPullRequests(data);
-		await refreshBadge();
-		await notify(source, previous, data);
-		console.log(`Fetched ${data.myPRs.length} my PRs, ${data.reviewRequests.length} review requests`);
+		await syncPRs();
 	} catch (error) {
-		console.error('Failed to fetch PR data:', error);
-		if (isAuthError(error)) {
-			const config = await storage.getProvider();
-			if (config) {
-				config.isTokenInvalid = true;
-				await storage.setProvider(config);
-			}
-		}
 		if (throwError) throw error;
 	}
+}
+
+function runSync(): Promise<void> {
+	return runSyncWith({
+		storage,
+		makeSource: (provider) => new GitHubProvider({ token: provider.token, baseUrl: provider.baseUrl }),
+		fetchWithRetry,
+		refreshBadge,
+		notify,
+	});
 }
 
 /** The count itself is decided by the view module, so the popup and the badge cannot disagree. */
 async function refreshBadge(): Promise<void> {
 	const { settings, pullRequests } = await storage.getBootstrapData();
+	// A first sync's partial list is not a count worth showing.
+	if (pullRequests.lastFetched === null) {
+		await updateBadge(0);
+		return;
+	}
 	const filters = await storage.getFilters(settings.pinnedTab);
 	await updateBadge(badgeCount(pullRequests, settings, filters));
 }
@@ -238,9 +238,13 @@ runtimeOnMessageAddListener(async (message) => {
 });
 
 const messageHandlers: Record<RuntimeMessage['type'], (message: RuntimeMessage) => Promise<unknown>> = {
+	// Answers before the first fetch finishes: with many PRs that fetch takes tens of seconds, and both
+	// onboarding and settings wait on this reply. The popup follows the fetch through `syncStatus`.
+	// A sync already running was started with the previous token, so this one queues behind it rather
+	// than joining it.
 	PROVIDER_CONFIGURED: async () => {
-		await fetchAndCachePRs();
 		await setupPollingAlarm(true);
+		void (syncInFlight ?? Promise.resolve()).catch(() => undefined).then(() => fetchAndCachePRs());
 		return { success: true };
 	},
 	REFRESH_PRS: async () => {
