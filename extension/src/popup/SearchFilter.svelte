@@ -109,6 +109,7 @@
         repos: false,
         drafts: false,
         reviewStatus: false,
+        conflicts: false,
     });
 
     let searchInput = $state<HTMLInputElement | null>(null);
@@ -358,6 +359,7 @@
     let reviewStatusLabel = $derived(
         activeFilters.showReviewed ? 'All' : 'Pending only'
     );
+    let conflictsLabel = $derived(activeFilters.conflictsOnly ? 'Only conflicts' : 'All');
     let selectedFilterChips = $derived<FilterChip[]>([
         ...(activeFilters.authors.length > 1
             ? activeFilters.authors.map((authorLogin) => ({
@@ -413,6 +415,7 @@
                 repos: false,
                 drafts: false,
                 reviewStatus: false,
+                conflicts: false,
             };
         }
     });
@@ -555,6 +558,25 @@
                             {/if}
                         </div>
                     {/if}
+
+                    <div class="filter-section">
+                        {@render sectionHeader('conflicts', 'Merge Conflicts', conflictsLabel, null)}
+
+                        {#if expandedSections.conflicts}
+                            <div class={`filter-section-body ${layout.contentPad}`}>
+                        <div class={`flex flex-col ${layout.sectionGap}`}>
+                            <label class={`filter-label ${layout.labelPad}`}>
+                                <input type="radio" name="conflict_filter" value="all" checked={!activeFilters.conflictsOnly} onchange={() => { activeFilters = { ...activeFilters, conflictsOnly: false }; }} class="h-3.5 w-3.5 border-soft bg-black/40 text-(--accent) focus:ring-(--accent)" />
+                                <span class="filter-label-text">All PRs</span>
+                            </label>
+                            <label class={`filter-label ${layout.labelPad}`}>
+                                <input type="radio" name="conflict_filter" value="only" checked={activeFilters.conflictsOnly} onchange={() => { activeFilters = { ...activeFilters, conflictsOnly: true }; }} class="h-3.5 w-3.5 border-soft bg-black/40 text-(--accent) focus:ring-(--accent)" />
+                                <span class="min-w-0 flex-1 text-soft">Only PRs with conflicts</span>
+                            </label>
+                        </div>
+                            </div>
+                        {/if}
+                    </div>
 
                     {#each filterSections as filterSection (filterSection.key)}
                         {#if filterSection.show}
