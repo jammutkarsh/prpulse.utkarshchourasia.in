@@ -94,9 +94,13 @@
 	}
 
 	function nextStep() {
-		if (currentStep === STEP_JIRA && settings.jiraBaseUrl && !isValidHttpUrl(settings.jiraBaseUrl)) {
-			errorMessage = 'Please enter a valid Jira URL or leave the field empty.';
-			return;
+		if (currentStep === STEP_JIRA && settings.jiraBaseUrl) {
+			const sanitized = sanitizeJiraUrl(settings.jiraBaseUrl);
+			if (!sanitized || !isValidHttpUrl(sanitized)) {
+				errorMessage = 'Please enter a valid Jira URL or leave the field empty.';
+				return;
+			}
+			settings = { ...settings, jiraBaseUrl: sanitized };
 		}
 
 		errorMessage = '';
@@ -116,11 +120,9 @@
 		settings = { ...settings, notificationsEnabled: enabled && (await permissionsRequest(['notifications'])) };
 	}
 
+	// Kept raw while typing: sanitising per keystroke eats the trailing `/` and a context path can't be typed.
 	function updateJiraUrl(value: string) {
-		settings = {
-			...settings,
-			jiraBaseUrl: sanitizeJiraUrl(value.trim()),
-		};
+		settings = { ...settings, jiraBaseUrl: value };
 	}
 
 	async function completeSetup() {
@@ -135,7 +137,7 @@
 
 		try {
 			// Settings first: the worker reads them the moment the provider commit wakes it.
-			await storage.setSettings(settings);
+			await storage.setSettings({ ...settings, jiraBaseUrl: sanitizeJiraUrl(settings.jiraBaseUrl) });
 
 			// Listen for the PR data write triggered by the service worker
 			const prSyncPromise = new Promise<number>((resolve) => {
