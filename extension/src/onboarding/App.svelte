@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { permissionsRequest, runtimeGetURL, storageOnChangedAddListener, type StorageChangeMap } from '../../lib/extension-api';
 	import { storage } from '../../lib/storage';
 	import { DEFAULT_SETTINGS } from '../../lib/ui-config';
-	import type { PullRequestData, Settings, StoredProviderConfig } from '../../lib/types';
+	import type { PullRequestData, Settings, StoredProviderConfig, SyncStatus } from '../../lib/types';
+	import { activeSync } from '../../lib/popup-session';
 	import { isValidHttpUrl } from '../../lib/utils';
 	import { sanitizeJiraUrl } from '../../lib/jira';
 	import { commitProvider, connectGithubToken } from '../../lib/github-connect';
@@ -53,6 +54,10 @@
 	let completingSetup = $state(false);
 	let onboardingStateReady = $state(false);
 	let syncedPrCount = $state(0);
+	// The first sync runs on after setup finishes; the last step counts PRs as they land.
+	let syncing = $state(false);
+	let stopSyncWatch: (() => void) | null = null;
+	onDestroy(() => stopSyncWatch?.());
 
 	onMount(() => {
 		const saved = sessionStorage.getItem('prPulseOnboarding');
@@ -137,26 +142,29 @@
 			// Settings first: the worker reads them the moment the provider commit wakes it.
 			await storage.setSettings(settings);
 
-			// Listen for the PR data write triggered by the service worker
-			const prSyncPromise = new Promise<number>((resolve) => {
-				const unsubscribe = storageOnChangedAddListener((changes: StorageChangeMap, areaName: string) => {
-					if (areaName !== 'local' || !changes.pullRequests?.newValue) return;
-					unsubscribe();
-					const data = changes.pullRequests.newValue as PullRequestData;
-					resolve((data.myPRs?.length || 0) + (data.reviewRequests?.length || 0));
-				});
-				// Timeout fallback in case no PRs are fetched
-				setTimeout(() => {
-					unsubscribe();
-					resolve(0);
-				}, 15000);
+			// Follow the worker's first sync from here on. Nothing waits for it: with many PRs it takes tens
+			// of seconds, and the last step is useful long before it ends.
+			stopSyncWatch?.();
+			syncing = true;
+			stopSyncWatch = storageOnChangedAddListener((changes: StorageChangeMap, areaName: string) => {
+				if (areaName !== 'local') return;
+				const data = changes.pullRequests?.newValue as PullRequestData | undefined;
+				if (data) {
+					syncedPrCount = (data.myPRs?.length || 0) + (data.reviewRequests?.length || 0);
+				}
+				const status = changes.syncStatus?.newValue as SyncStatus | undefined;
+				if (changes.syncStatus) {
+					syncing = activeSync(status) !== null;
+				}
 			});
 
 			await commitProvider(providerData);
-			syncedPrCount = await prSyncPromise;
 			currentStep = STEP_COMPLETE;
 		} catch (error) {
 			console.error('Setup failed:', error);
+			stopSyncWatch?.();
+			stopSyncWatch = null;
+			syncing = false;
 			errorMessage = 'Failed to complete setup. Please try again.';
 		} finally {
 			completingSetup = false;
@@ -262,6 +270,7 @@
 			<CompleteStep
 				displayMode={settings.displayMode}
 				{syncedPrCount}
+				{syncing}
 				onClose={closeSetup}
 			/>
 		{/if}

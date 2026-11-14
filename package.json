@@ -13,7 +13,7 @@
 	"scripts": {
 		"dev": "vite",
 		"check": "svelte-check --incremental",
-		"test": "bun extension/lib/providers/github-provider.test.ts && bun extension/lib/pr-view.test.ts && bun extension/lib/pr-notify.test.ts && bun extension/lib/popup-session.test.ts && bun extension/lib/storage.test.ts && bun extension/lib/jira.test.ts",
+		"test": "bun extension/lib/providers/github-provider.test.ts && bun extension/lib/pr-view.test.ts && bun extension/lib/pr-notify.test.ts && bun extension/lib/popup-session.test.ts && bun extension/lib/storage.test.ts && bun extension/lib/sync.test.ts && bun extension/lib/jira.test.ts",
 		"format": "prettier --write .",
 		"lint": "eslint . --ext .js,.ts,.svelte --cache --cache-location .cache/eslint",
 		"deadcode": "fallow fix",

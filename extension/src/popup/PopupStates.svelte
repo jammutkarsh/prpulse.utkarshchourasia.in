@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Inbox, UserRound } from 'lucide-svelte';
+	import { Inbox, RefreshCw, UserRound } from 'lucide-svelte';
 	import Button from '../lib/components/Button.svelte';
 	import type { Settings } from '../../lib/types';
 
@@ -7,6 +7,8 @@
 		setupRequired?: boolean;
 		errorMessage?: string;
 		currentTab?: Settings['pinnedTab'];
+		/** A fetch is running, so an empty list means "not here yet" rather than "none". */
+		syncing?: boolean;
 		onOpenSetup?: () => void;
 		onRetry?: () => void;
 	}
@@ -15,6 +17,7 @@
 		setupRequired = false,
 		errorMessage = '',
 		currentTab = 'myPRs',
+		syncing = false,
 		onOpenSetup = () => {},
 		onRetry = () => {}
 	}: Props = $props();
@@ -35,6 +38,14 @@
 	<div class="state-shell">
 		<div class="text-sm text-(--danger)">{errorMessage}</div>
 		<Button variant="secondary" onclick={onRetry}>Try Again</Button>
+	</div>
+{:else if syncing}
+	<div class="state-shell">
+		<div class="rounded-full bg-white/6 p-4 text-soft">
+			<RefreshCw class="h-8 w-8 animate-spin" />
+		</div>
+		<h2 class="text-lg font-semibold">Fetching pull requests</h2>
+		<p class="max-w-sm desc">They will show up here as they arrive.</p>
 	</div>
 {:else}
 	<div class="state-shell">

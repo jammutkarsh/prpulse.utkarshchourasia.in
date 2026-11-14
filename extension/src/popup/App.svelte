@@ -16,7 +16,7 @@
 		type Unsubscribe,
 	} from '../../lib/extension-api';
 	import { storage } from '../../lib/storage';
-	import type { PopupFilters, PopupTab, PullRequestData, Settings } from '../../lib/types';
+	import type { PopupFilters, PopupTab, PullRequestData, Settings, SyncStatus } from '../../lib/types';
 	import { createPopupSession, type PopupState } from '../../lib/popup-session';
 	import { createDefaultFilters, createPrView, sameFilters } from '../../lib/pr-view';
 	import {
@@ -84,8 +84,13 @@
 	});
 
 	function onStorageChanged(changes: StorageChangeMap, areaName: string) {
-		if (areaName !== 'local' || !changes.pullRequests?.newValue) return;
-		session.applyPullRequests(changes.pullRequests.newValue as PullRequestData);
+		if (areaName !== 'local') return;
+		if (changes.syncStatus) {
+			session.applySyncStatus(changes.syncStatus.newValue as SyncStatus | undefined);
+		}
+		if (changes.pullRequests?.newValue) {
+			session.applyPullRequests(changes.pullRequests.newValue as PullRequestData);
+		}
 	}
 
 	async function redirectToFullpage(bootstrapSettings: Settings): Promise<boolean> {
@@ -207,11 +212,16 @@
 	let currentTab = $derived(popup.tab);
 	let prData = $derived(popup.pullRequests);
 	let newPrCount = $derived(popup.newPrCount);
+	let sync = $derived(popup.sync);
+	let syncing = $derived(refreshInProgress || sync !== null);
 
 	let currentItems = $derived(currentTab === 'myPRs' ? prData.myPRs || [] : prData.reviewRequests || []);
 	let myPrCount = $derived(prData.myPRs?.length || 0);
 	let reviewCount = $derived(prData.reviewRequests?.length || 0);
-	let lastUpdatedText = $derived(prData.lastFetched ? `Updated ${formatRelativeTime(prData.lastFetched)}` : 'Waiting for first sync');
+	let syncText = $derived(sync && sync.total > 0 ? `Syncing… ${Math.min(sync.loaded, sync.total)} of ${sync.total} PRs` : 'Syncing…');
+	let lastUpdatedText = $derived(
+		syncing ? syncText : prData.lastFetched ? `Updated ${formatRelativeTime(prData.lastFetched)}` : 'Waiting for first sync',
+	);
 	let fullpageShellClasses = $derived(isFullpageMode ? 'w-full max-w-[80rem]' : 'h-full');
 	let cardListClasses = $derived(isFullpageMode ? 'grid gap-3 xl:grid-cols-2' : 'flex flex-col gap-3 pr-1 scroll-thin');
 	let view = $derived(createPrView(currentItems, activeFilters, searchQuery, currentTab));
@@ -241,7 +251,7 @@
 			<PopupHeader
 				{provider}
 				{isFullpageMode}
-				{refreshInProgress}
+				refreshInProgress={syncing}
 				showCompactIdentity={showSearchControls}
 				{showTabToggle}
 				{showSearchControls}
@@ -296,6 +306,7 @@
 						{setupRequired}
 						{errorMessage}
 						{currentTab}
+						syncing={syncing && prData.lastFetched === null}
 						onOpenSetup={openSetup}
 						onRetry={() => session.reload()}
 					/>
