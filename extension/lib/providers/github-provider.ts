@@ -14,7 +14,7 @@ import type {
 type GraphQLReview = {
 	databaseId: number | null;
 	state: string;
-	author: { login: string; avatarUrl: string } | null;
+	author: { login: string; avatarUrl: string; __typename?: string } | null;
 };
 
 type GraphQLPullRequest = {
@@ -35,7 +35,9 @@ type GraphQLPullRequest = {
 	repository: { nameWithOwner: string; owner: { login: string; __typename: string } } | null;
 	commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
 	reviews: { nodes: GraphQLReview[] };
-	reviewRequests: { nodes: Array<{ requestedReviewer: { login?: string } | null }> };
+	reviewRequests: { nodes: Array<{ requestedReviewer: { __typename?: string; login?: string } | null }> };
+	/** GitHub's own verdict, branch protection and code owners included. Null when no review is required. */
+	reviewDecision?: string | null;
 	reviewThreads: {
 		nodes: Array<{ isResolved: boolean; isOutdated: boolean; comments: { nodes: Array<{ url: string; createdAt: string }> } }>;
 	};
@@ -118,8 +120,9 @@ const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
 				author { login avatarUrl ... on User { name } }
 				repository { nameWithOwner owner { login __typename } }
 				commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-				reviews(last: ${REVIEWS_PAGE_SIZE}) { nodes { databaseId state author { login avatarUrl } } }
-				reviewRequests(first: ${REVIEW_REQUESTS_PAGE_SIZE}) { nodes { requestedReviewer { ... on User { login } } } }
+				reviewDecision
+				reviews(last: ${REVIEWS_PAGE_SIZE}) { nodes { databaseId state author { __typename login avatarUrl } } }
+				reviewRequests(first: ${REVIEW_REQUESTS_PAGE_SIZE}) { nodes { requestedReviewer { __typename ... on User { login } } } }
 				reviewThreads(first: ${REVIEW_THREADS_PAGE_SIZE}) { nodes { isResolved isOutdated comments(first: 1) { nodes { url createdAt } } } }
 			}
 		}
@@ -161,6 +164,12 @@ const REVIEW_STATE = {
 	pending: 'PENDING',
 } as const;
 
+const REVIEW_DECISION: Record<string, PullRequestReviews['status']> = {
+	APPROVED: 'approved',
+	CHANGES_REQUESTED: 'changes_requested',
+	REVIEW_REQUIRED: 'pending',
+};
+
 const KNOWN_REVIEW_STATES: ReadonlySet<string> = new Set(Object.values(REVIEW_STATE));
 
 function mapEnum<T>(map: Record<string, T>, value: string | null | undefined, fallback: T, label: string): T {
@@ -193,6 +202,88 @@ export function firstUnresolvedThreadUrl(
 
 export function nextPageSize(issueCount: number, alreadySeen: number): number {
 	return Math.min(Math.max(issueCount - alreadySeen, 1), MAX_PAGE_SIZE);
+}
+
+export function buildReviews(pr: GraphQLPullRequest): PullRequestReviews {
+	const requests = pr.reviewRequests?.nodes || [];
+	// Users only: `pendingReviewers` is matched against the viewer's login for review-request notifications.
+	const pendingReviewers = requests.map((node) => node.requestedReviewer?.login).filter((login): login is string => !!login);
+	// A team request is a review nobody has given yet; it carries only `__typename`, no login.
+	const pendingTeams = requests.filter((node) => node.requestedReviewer?.__typename === 'Team').length;
+	const reRequested = new Set(pendingReviewers);
+	const reviews = pr.reviews?.nodes || [];
+	const reviewerMap = new Map<string, PullRequestReviewer>();
+
+	for (const review of reviews) {
+		// Bots (code-quality gates and the like) approve automatically; GitHub's own decision doesn't count
+		// them toward required reviews, so neither does this.
+		if (!review.author || review.author.__typename === 'Bot') {
+			continue;
+		}
+
+		if (!KNOWN_REVIEW_STATES.has(review.state)) {
+			console.warn(`GitHub GraphQL: unrecognized review state "${review.state}", ignoring review`);
+			continue;
+		}
+
+		// PENDING and COMMENTED carry no verdict, and a re-requested reviewer's old verdict is stale.
+		if (review.state === REVIEW_STATE.pending || review.state === REVIEW_STATE.commented) {
+			continue;
+		}
+
+		if (reRequested.has(review.author.login)) {
+			continue;
+		}
+
+		reviewerMap.set(review.author.login, {
+			login: review.author.login,
+			avatarUrl: review.author.avatarUrl,
+			state: review.state,
+		});
+	}
+
+	const reviewers = Array.from(reviewerMap.values());
+
+	// GitHub's decision wins when it has one: it knows the branch protection rules, code owners and
+	// required review count that this can't see. The local reading only fills in when no review is required.
+	let status: PullRequestReviews['status'];
+	const decision = mapEnum<PullRequestReviews['status'] | null>(REVIEW_DECISION, pr.reviewDecision, null, 'review decision');
+	if (decision) {
+		status = decision;
+	} else if (reviewers.some((reviewer) => reviewer.state === REVIEW_STATE.changesRequested)) {
+		status = 'changes_requested';
+	} else if (pendingReviewers.length > 0 || pendingTeams > 0 || reviewers.length === 0) {
+		status = 'pending';
+	} else {
+		status = reviewers.every((reviewer) => reviewer.state === REVIEW_STATE.approved) ? 'approved' : 'pending';
+	}
+
+	let changesRequestedReviewId: number | undefined;
+	let openThreadCount: number | undefined;
+	let unresolvedThreadUrl: string | undefined;
+	if (status === 'changes_requested') {
+		// Reviews come back oldest-first; the last one is the most recent, for deep-linking.
+		const changesRequested = reviews.filter(
+			(review) => review.state === REVIEW_STATE.changesRequested && review.author?.__typename !== 'Bot',
+		);
+		changesRequestedReviewId = changesRequested[changesRequested.length - 1]?.databaseId ?? undefined;
+
+		// Only GraphQL exposes thread resolution state; REST review comments have no
+		// isResolved/isOutdated, which is why resolved threads used to be counted as open.
+		// Caps at REVIEW_THREADS_PAGE_SIZE — a busier PR under-reports rather than costing every PR more.
+		const threads = pr.reviewThreads?.nodes || [];
+		openThreadCount = threads.filter((thread) => !thread.isResolved && !thread.isOutdated).length;
+		unresolvedThreadUrl = firstUnresolvedThreadUrl(threads);
+	}
+
+	return {
+		status,
+		reviewers,
+		pendingReviewers,
+		openThreadCount,
+		changesRequestedReviewId,
+		firstUnresolvedThreadUrl: unresolvedThreadUrl,
+	};
 }
 
 export class GitHubProvider implements PrSource {
@@ -311,77 +402,6 @@ export class GitHubProvider implements PrSource {
 		return { status: mapEnum(CHECK_STATUS_BY_ROLLUP, state, 'unknown', 'statusCheckRollup state') };
 	}
 
-	#buildReviews(pr: GraphQLPullRequest): PullRequestReviews {
-		const pendingReviewers = (pr.reviewRequests?.nodes || [])
-			.map((node) => node.requestedReviewer?.login)
-			.filter((login): login is string => !!login);
-		const reRequested = new Set(pendingReviewers);
-		const reviews = pr.reviews?.nodes || [];
-		const reviewerMap = new Map<string, PullRequestReviewer>();
-
-		for (const review of reviews) {
-			if (!review.author) {
-				continue;
-			}
-
-			if (!KNOWN_REVIEW_STATES.has(review.state)) {
-				console.warn(`GitHub GraphQL: unrecognized review state "${review.state}", ignoring review`);
-				continue;
-			}
-
-			// PENDING and COMMENTED carry no verdict, and a re-requested reviewer's old verdict is stale.
-			if (review.state === REVIEW_STATE.pending || review.state === REVIEW_STATE.commented) {
-				continue;
-			}
-
-			if (reRequested.has(review.author.login)) {
-				continue;
-			}
-
-			reviewerMap.set(review.author.login, {
-				login: review.author.login,
-				avatarUrl: review.author.avatarUrl,
-				state: review.state,
-			});
-		}
-
-		const reviewers = Array.from(reviewerMap.values());
-
-		let status: PullRequestReviews['status'];
-		if (reviewers.some((reviewer) => reviewer.state === REVIEW_STATE.changesRequested)) {
-			status = 'changes_requested';
-		} else if (pendingReviewers.length > 0 || reviewers.length === 0) {
-			status = 'pending';
-		} else {
-			status = reviewers.every((reviewer) => reviewer.state === REVIEW_STATE.approved) ? 'approved' : 'pending';
-		}
-
-		let changesRequestedReviewId: number | undefined;
-		let openThreadCount: number | undefined;
-		let unresolvedThreadUrl: string | undefined;
-		if (status === 'changes_requested') {
-			// Reviews come back oldest-first; the last one is the most recent, for deep-linking.
-			const changesRequested = reviews.filter((review) => review.state === REVIEW_STATE.changesRequested);
-			changesRequestedReviewId = changesRequested[changesRequested.length - 1]?.databaseId ?? undefined;
-
-			// Only GraphQL exposes thread resolution state; REST review comments have no
-			// isResolved/isOutdated, which is why resolved threads used to be counted as open.
-			// Caps at REVIEW_THREADS_PAGE_SIZE — a busier PR under-reports rather than costing every PR more.
-			const threads = pr.reviewThreads?.nodes || [];
-			openThreadCount = threads.filter((thread) => !thread.isResolved && !thread.isOutdated).length;
-			unresolvedThreadUrl = firstUnresolvedThreadUrl(threads);
-		}
-
-		return {
-			status,
-			reviewers,
-			pendingReviewers,
-			openThreadCount,
-			changesRequestedReviewId,
-			firstUnresolvedThreadUrl: unresolvedThreadUrl,
-		};
-	}
-
 	#transformPullRequest(pr: GraphQLPullRequest): PullRequest {
 		const repoFullName = pr.repository?.nameWithOwner || '';
 		const authorLogin = pr.author?.login || '';
@@ -410,7 +430,7 @@ export class GitHubProvider implements PrSource {
 				filesChanged: pr.changedFiles,
 			},
 			checks: this.#buildChecks(pr),
-			reviews: this.#buildReviews(pr),
+			reviews: buildReviews(pr),
 			createdAt: pr.createdAt,
 			updatedAt: pr.updatedAt,
 			isDraft: pr.isDraft,

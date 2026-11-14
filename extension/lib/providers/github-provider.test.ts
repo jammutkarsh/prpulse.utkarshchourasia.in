@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { firstUnresolvedThreadUrl, nextPageSize } from './github-provider';
+import { buildReviews, firstUnresolvedThreadUrl, nextPageSize } from './github-provider';
 
 // Sizing the request to the count probe is what keeps a 7-PR user from being billed like a 100-PR one,
 // so the arithmetic gets a check. Run with: npm test
@@ -51,4 +51,63 @@ function testFirstUnresolvedThreadUrl(): void {
 }
 
 testFirstUnresolvedThreadUrl();
+
+// Review status, modelled on a real PR: a code-quality bot approved it four times, a team's review was
+// still requested, and GitHub said REVIEW_REQUIRED. It used to read as approved. Run with: bun run test
+function testReviewStatus(): void {
+	type ReviewInput = Parameters<typeof buildReviews>[0];
+	const review = (login: string, state: string, typename = 'User') => ({
+		databaseId: 1,
+		state,
+		author: { login, avatarUrl: '', __typename: typename },
+	});
+	const pr = (overrides: Partial<ReviewInput>): ReviewInput =>
+		({ reviews: { nodes: [] }, reviewRequests: { nodes: [] }, reviewThreads: { nodes: [] }, ...overrides }) as ReviewInput;
+
+	const botApprovals = { nodes: [review('codescene-access', 'APPROVED', 'Bot'), review('codescene-access', 'APPROVED', 'Bot')] };
+	const teamRequest = { nodes: [{ requestedReviewer: { __typename: 'Team' } }] };
+
+	// GitHub's own decision wins, whatever the reviews look like.
+	assert.equal(
+		buildReviews(pr({ reviews: botApprovals, reviewRequests: teamRequest, reviewDecision: 'REVIEW_REQUIRED' })).status,
+		'pending',
+	);
+	assert.equal(buildReviews(pr({ reviews: botApprovals, reviewDecision: 'APPROVED' })).status, 'approved');
+	assert.equal(buildReviews(pr({ reviewDecision: 'CHANGES_REQUESTED' })).status, 'changes_requested');
+
+	// No decision (no review required): bots don't count as reviewers, and a team request is still pending.
+	const botsOnly = buildReviews(pr({ reviews: botApprovals, reviewDecision: null }));
+	assert.equal(botsOnly.status, 'pending');
+	assert.deepEqual(botsOnly.reviewers, []);
+	assert.equal(buildReviews(pr({ reviews: { nodes: [review('ada', 'APPROVED')] }, reviewRequests: teamRequest })).status, 'pending');
+
+	// A person's approval with nothing outstanding still reads as approved.
+	assert.equal(
+		buildReviews(pr({ reviews: { nodes: [review('ada', 'APPROVED'), review('bot', 'APPROVED', 'Bot')] } })).status,
+		'approved',
+	);
+
+	// An unrecognised decision falls back to the local reading.
+	assert.equal(buildReviews(pr({ reviews: { nodes: [review('ada', 'APPROVED')] }, reviewDecision: 'SOMETHING_NEW' })).status, 'approved');
+
+	// A GitHub-reported CHANGES_REQUESTED still yields the deep-link fields, skipping bot reviews.
+	const changes = buildReviews(
+		pr({
+			reviews: { nodes: [{ ...review('ada', 'CHANGES_REQUESTED'), databaseId: 7 }, { ...review('bot', 'CHANGES_REQUESTED', 'Bot'), databaseId: 9 }] },
+			reviewThreads: {
+				nodes: [{ isResolved: false, isOutdated: false, comments: { nodes: [{ url: 'u1', createdAt: '2024-01-01T00:00:00Z' }] } }],
+			},
+			reviewDecision: 'CHANGES_REQUESTED',
+		}),
+	);
+	assert.equal(changes.changesRequestedReviewId, 7);
+	assert.equal(changes.openThreadCount, 1);
+	assert.equal(changes.firstUnresolvedThreadUrl, 'u1');
+
+	// Team requests stay out of `pendingReviewers`, which notifications match against the viewer's login.
+	const mixed = { nodes: [{ requestedReviewer: { __typename: 'User', login: 'ada' } }, { requestedReviewer: { __typename: 'Team' } }] };
+	assert.deepEqual(buildReviews(pr({ reviewRequests: mixed })).pendingReviewers, ['ada']);
+}
+
+testReviewStatus();
 console.log('github-provider: all checks passed');
