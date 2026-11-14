@@ -54,6 +54,23 @@ async function testFiltersRoundTripAndClear(): Promise<void> {
 	assert.deepEqual((await storage.getFilters('myPRs')).myPRs.repos, []);
 }
 
+async function testSwitchingAccountDropsTheOldCache(): Promise<void> {
+	const storage = createStorage(createMemoryStore());
+	const ada = { type: 'github' as const, token: 'a', user: { login: 'ada' } } as Parameters<typeof storage.setProvider>[0];
+	const bob = { ...ada, token: 'b', user: { login: 'bob' } } as typeof ada;
+
+	await storage.setProvider(ada);
+	await storage.setPullRequests({ myPRs: [], reviewRequests: [] });
+
+	// Same login with a new token or a flagged-invalid token is the same account: keep the diff base.
+	await storage.setProvider({ ...ada, token: 'a2', isTokenInvalid: true });
+	assert.notEqual((await storage.getPullRequests()).lastFetched, null);
+
+	// A different login must start from nothing, so a failed first fetch cannot notify from ada's cache.
+	await storage.setProvider(bob);
+	assert.equal((await storage.getPullRequests()).lastFetched, null);
+}
+
 async function testAuthenticatedNeedsTokenAndUser(): Promise<void> {
 	const storage = createStorage(createMemoryStore());
 
@@ -71,5 +88,6 @@ await testDefaultsOnEmptyStore();
 await testBootstrapMatchesTheIndividualReads();
 await testSettingsMerge();
 await testFiltersRoundTripAndClear();
+await testSwitchingAccountDropsTheOldCache();
 await testAuthenticatedNeedsTokenAndUser();
 console.log('storage: all checks passed');
