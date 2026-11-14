@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { jiraDashboardUrlFor, jiraLinkFor, jiraTicketFor, sanitizeJiraUrl } from './jira';
+import { commitJiraUrl, jiraDashboardUrlFor, jiraLinkFor, jiraTicketFor, sanitizeJiraUrl } from './jira';
 
 // This module takes a user-supplied URL and builds a link the popup renders as an anchor, so the
 // sanitising is a trust boundary, not a formatting nicety. Run with: npm test
@@ -31,6 +31,11 @@ function testSanitizeKeepsSelfHostedContextPath(): void {
 	assert.equal(sanitizeJiraUrl('https://example.com/jira/secure/Dashboard.jspa'), 'https://example.com/jira');
 	assert.equal(sanitizeJiraUrl('https://jira.example.com/browse/PB-1'), 'https://jira.example.com');
 	assert.equal(sanitizeJiraUrl('https://jira.example.com/projects/PB/issues'), 'https://jira.example.com');
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/login.jsp?os_destination=%2Fbrowse'), 'https://example.com/jira');
+
+	// Route names match whatever case a pasted link used.
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/Browse/PB-1'), 'https://example.com/jira');
+	assert.equal(sanitizeJiraUrl('https://example.com/jira/SECURE/Dashboard.jspa'), 'https://example.com/jira');
 
 	assert.deepEqual(jiraLinkFor('feat/PB-42-x', 'https://example.com/jira/browse/PB-1'), {
 		ticket: 'PB-42',
@@ -42,6 +47,26 @@ function testDashboardUrl(): void {
 	assert.equal(jiraDashboardUrlFor('acme.atlassian.net'), 'https://acme.atlassian.net/jira/for-you');
 	assert.equal(jiraDashboardUrlFor('https://example.com/jira'), 'https://example.com/jira/secure/Dashboard.jspa');
 	assert.equal(jiraDashboardUrlFor('javascript:alert(1)'), '');
+
+	// A pasted dashboard link must not be doubled up.
+	assert.equal(
+		jiraDashboardUrlFor('https://example.com/jira/secure/Dashboard.jspa'),
+		'https://example.com/jira/secure/Dashboard.jspa',
+	);
+}
+
+function testCommitJiraUrl(): void {
+	// While typing the raw text is kept, so a context path can be entered; only committing sanitises.
+	assert.equal(commitJiraUrl('https://example.com/jira'), 'https://example.com/jira');
+	assert.equal(commitJiraUrl('  example.com/jira/browse/PB-1  '), 'https://example.com/jira');
+
+	// Blank means "no Jira", not an error.
+	assert.equal(commitJiraUrl(''), '');
+	assert.equal(commitJiraUrl('   '), '');
+
+	// Typed but unusable must be reported, not silently turned into an empty field.
+	assert.equal(commitJiraUrl('javascript:alert(1)'), null);
+	assert.equal(commitJiraUrl('ftp://example.com'), null);
 }
 
 function testSanitizeRejectsEverythingElse(): void {
@@ -94,6 +119,7 @@ function testLinkNeedsBothHalves(): void {
 testSanitizeAcceptsWhatUsersActuallyType();
 testSanitizeKeepsSelfHostedContextPath();
 testDashboardUrl();
+testCommitJiraUrl();
 testSanitizeRejectsEverythingElse();
 testTicketExtraction();
 testLinkNeedsBothHalves();

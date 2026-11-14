@@ -33,6 +33,16 @@ export function sanitizeJiraUrl(url: string): string {
 }
 
 /**
+ * What to store when the user commits the field: `''` for a blank one, `null` when something was typed
+ * that cannot become a base URL. Typing must not go through this; sanitising per keystroke eats the `/`.
+ */
+export function commitJiraUrl(typed: string): string | null {
+	if (!typed.trim()) return '';
+
+	return sanitizeJiraUrl(typed) || null;
+}
+
+/**
  * Where Jira's own routes start. Everything from the first of these on is a pasted deep link, not
  * part of the base. `jira` is deliberately absent: on Data Center it is the usual context path.
  */
