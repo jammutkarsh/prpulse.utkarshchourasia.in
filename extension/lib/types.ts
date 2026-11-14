@@ -62,6 +62,8 @@ export interface PullRequest {
 	isDraft: boolean;
 	/** GitHub computes this lazily, so `unknown` is normal right after a base-branch push. Absent when the source can't tell. */
 	mergeable?: 'mergeable' | 'conflicting' | 'unknown';
+	/** Commits the base branch has that this PR's branch lacks. Absent when the source can't tell. */
+	behindBy?: number;
 }
 
 /** What every pull-request source hands back, whatever it reads from. */
@@ -131,6 +133,8 @@ export interface PopupFilters {
 	ageRange: string;
 	drafts: 'only' | 'include' | 'exclude';
 	showReviewed: boolean;
+	/** Only PRs GitHub reports as conflicting. `unknown` (not yet computed) is not a conflict. */
+	conflictsOnly: boolean;
 }
 
 export type StoredFilters = Partial<PopupFilters>;

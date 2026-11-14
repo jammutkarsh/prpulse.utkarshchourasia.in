@@ -16,6 +16,7 @@
 		formatPrAge,
 	} from '../../lib/utils';
 	import { jiraLinkFor } from '../../lib/jira';
+	import { hasMergeConflicts } from '../../lib/pr-view';
 	import type { PullRequest, Settings } from '../../lib/types';
 
 	// `tone` and `dot` are the CSS classes this card applies directly, so the maps live beside it.
@@ -88,11 +89,8 @@
 		return link && isValidHttpUrl(link.url) ? link : null;
 	}
 
-	// Conflicts block the merge whatever the reviewers think, so they replace the yellow/red review
-	// state. Approved stays green: the review is done and the badge shouldn't hide that.
-	function hasConflicts(pr: PullRequest) {
-		return pr.mergeable === 'conflicting' && pr.reviews?.status !== 'approved';
-	}
+	// Conflicts replace the yellow/red review state on the card.
+	const hasConflicts = hasMergeConflicts;
 
 	function getCardStatusClass(pr: PullRequest) {
 		if (pr.isDraft) {
@@ -232,6 +230,11 @@
 					<span class="status-inline-label">{reviewDisplay.label}</span>
 					<ExternalLink class="status-link-icon" />
 				</button>
+				{#if pr.behindBy && pr.behindBy > 0}
+					<span class="shrink-0 whitespace-nowrap text-[11px] font-medium text-dim" title={`${pr.behindBy} commit${pr.behindBy === 1 ? '' : 's'} on the base branch not yet in this branch`}>
+						{pr.behindBy} behind
+					</span>
+				{/if}
 				<div class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-medium leading-none text-dim" title={createdAtText}>
 					<Clock class="h-3 w-3" />
 					<span>{formatPrAge(pr.createdAt)}</span>

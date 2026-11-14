@@ -31,6 +31,8 @@ type GraphQLPullRequest = {
 	deletions: number;
 	changedFiles: number;
 	headRefName: string;
+	headRefOid: string;
+	baseRefName: string;
 	author: { login: string; avatarUrl: string; name?: string | null } | null;
 	repository: { nameWithOwner: string; owner: { login: string; __typename: string } } | null;
 	commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
@@ -115,6 +117,8 @@ const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
 				deletions
 				changedFiles
 				headRefName
+				headRefOid
+				baseRefName
 				author { login avatarUrl ... on User { name } }
 				repository { nameWithOwner owner { login __typename } }
 				commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -125,6 +129,41 @@ const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
 		}
 	}
 }`;
+
+// `compare` needs literal refs, which a search node can't hand to its own children, so behind-counts come
+// from a second, aliased query. Each alias is repository → ref → compare: 3 nodes, no pagination multiplier.
+// The head is the commit SHA rather than the branch name, so PRs from forks resolve too.
+const BEHIND_CHUNK_SIZE = 50;
+
+type BehindTarget = { id: string; owner: string; name: string; base: string; headOid: string };
+type BehindResponse = {
+	rateLimit: RateLimit | null;
+} & Record<string, { ref: { compare: { behindBy: number } | null } | null } | null>;
+
+export function buildBehindQuery(targets: BehindTarget[]): { query: string; variables: Record<string, string> } {
+	const variables: Record<string, string> = {};
+	const declarations: string[] = [];
+	const fields: string[] = [];
+
+	targets.forEach((target, i) => {
+		Object.assign(variables, { [`o${i}`]: target.owner, [`n${i}`]: target.name, [`b${i}`]: target.base, [`h${i}`]: target.headOid });
+		declarations.push(`$o${i}: String!, $n${i}: String!, $b${i}: String!, $h${i}: String!`);
+		fields.push(`p${i}: repository(owner: $o${i}, name: $n${i}) { ref(qualifiedName: $b${i}) { compare(headRef: $h${i}) { behindBy } } }`);
+	});
+
+	return { query: `query(${declarations.join(', ')}) {\n\trateLimit { cost remaining }\n\t${fields.join('\n\t')}\n}`, variables };
+}
+
+export function readBehindCounts(targets: BehindTarget[], data: BehindResponse): Map<string, number> {
+	const counts = new Map<string, number>();
+	targets.forEach((target, i) => {
+		const behindBy = data[`p${i}`]?.ref?.compare?.behindBy;
+		if (typeof behindBy === 'number') {
+			counts.set(target.id, behindBy);
+		}
+	});
+	return counts;
+}
 
 // GraphQL enums are uppercase and closed sets. Map them explicitly so an enum GitHub adds later shows up
 // as a warning rather than silently lowercasing into a value nothing downstream handles.
@@ -418,7 +457,52 @@ export class GitHubProvider implements PrSource {
 		};
 	}
 
-	async #fetchView(view: SearchView, issueCount: number): Promise<PullRequest[]> {
+	#rememberBehindTarget(node: GraphQLPullRequest, behindTargets: Map<string, BehindTarget>): void {
+		const name = node.repository?.nameWithOwner.split('/')[1];
+		if (node.repository && name && node.baseRefName && node.headRefOid) {
+			behindTargets.set(`github-${node.id}`, {
+				id: `github-${node.id}`,
+				owner: node.repository.owner.login,
+				name,
+				base: node.baseRefName,
+				headOid: node.headRefOid,
+			});
+		}
+	}
+
+	/**
+	 * How far each PR's branch trails its base, looked up once per distinct PR after the views are merged.
+	 * Best effort: a failed chunk leaves its counts off, never the refresh broken.
+	 */
+	async #attachBehindCounts(lists: PullRequest[][], behindTargets: Map<string, BehindTarget>): Promise<void> {
+		const byId = new Map<string, PullRequest[]>();
+		for (const pr of lists.flat()) {
+			byId.set(pr.id, [...(byId.get(pr.id) ?? []), pr]);
+		}
+		const targets = [...byId.keys()].flatMap((id) => behindTargets.get(id) ?? []);
+
+		const chunks: BehindTarget[][] = [];
+		for (let start = 0; start < targets.length; start += BEHIND_CHUNK_SIZE) {
+			chunks.push(targets.slice(start, start + BEHIND_CHUNK_SIZE));
+		}
+
+		await Promise.all(
+			chunks.map(async (chunk) => {
+				try {
+					const { query, variables } = buildBehindQuery(chunk);
+					const data = await this.#graphql<BehindResponse>(query, variables);
+					this.#logCost(`behind counts (${chunk.length})`, data.rateLimit);
+					for (const [id, behindBy] of readBehindCounts(chunk, data)) {
+						for (const pr of byId.get(id) ?? []) pr.behindBy = behindBy;
+					}
+				} catch (error) {
+					console.warn('GitHub GraphQL behind counts unavailable:', error);
+				}
+			}),
+		);
+	}
+
+	async #fetchView(view: SearchView, issueCount: number, behindTargets: Map<string, BehindTarget>): Promise<PullRequest[]> {
 		const pullRequests: PullRequest[] = [];
 		let cursor: string | null = null;
 		let dropped = 0;
@@ -434,6 +518,7 @@ export class GitHubProvider implements PrSource {
 					continue;
 				}
 
+				this.#rememberBehindTarget(node, behindTargets);
 				pullRequests.push(this.#transformPullRequest(node));
 			}
 
@@ -465,11 +550,12 @@ export class GitHubProvider implements PrSource {
 		const counts = await this.#graphql<CountResponse>(COUNT_QUERY, SEARCH_QUERIES);
 		this.#logCost('count probe', counts.rateLimit);
 
+		const behindTargets = new Map<string, BehindTarget>();
 		const [myPRs, reviewRequests, reviewedPRs] = await Promise.all(
 			(['myPRs', 'reviewRequests', 'reviewedPRs'] as const).map((view) => {
 				const issueCount = counts[view]?.issueCount ?? 0;
 				// Nothing to fetch: skip the request entirely rather than paying for an empty page.
-				return issueCount === 0 ? Promise.resolve([]) : this.#fetchView(view, issueCount);
+				return issueCount === 0 ? Promise.resolve([]) : this.#fetchView(view, issueCount, behindTargets);
 			}),
 		);
 
@@ -482,6 +568,8 @@ export class GitHubProvider implements PrSource {
 				merged.push(pr);
 			}
 		}
+
+		await this.#attachBehindCounts([myPRs, merged], behindTargets);
 
 		return { myPRs, reviewRequests: merged };
 	}
