@@ -208,9 +208,7 @@ export function buildReviews(pr: GraphQLPullRequest): PullRequestReviews {
 	const requests = pr.reviewRequests?.nodes || [];
 	// Users only: `pendingReviewers` is matched against the viewer's login for review-request notifications.
 	const pendingReviewers = requests.map((node) => node.requestedReviewer?.login).filter((login): login is string => !!login);
-	// A review requested from a team is still a review nobody has given. The query reads no team fields,
-	// so these come back as `{ __typename: 'Team' }`; before `__typename` was asked for they were `{}` and
-	// silently dropped, which let a PR waiting on a team read as approved.
+	// A team request is a review nobody has given yet; it carries only `__typename`, no login.
 	const pendingTeams = requests.filter((node) => node.requestedReviewer?.__typename === 'Team').length;
 	const reRequested = new Set(pendingReviewers);
 	const reviews = pr.reviews?.nodes || [];
